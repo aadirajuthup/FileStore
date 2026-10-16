@@ -32,16 +32,22 @@ async def get_messages(client, message_ids):
     total_messages = 0
     while total_messages != len(message_ids):
         temb_ids = message_ids[total_messages:total_messages+200]
+        msgs = []
         try:
             # Use new multi-DB channel function
             msgs = await get_messages_from_db_channels(client, temb_ids)
         except FloodWait as e:
             await asyncio.sleep(e.x)
-            msgs = await get_messages_from_db_channels(client, temb_ids)
-        except:
-            pass
+            try:
+                msgs = await get_messages_from_db_channels(client, temb_ids)
+            except Exception as e2:
+                client.LOGGER(__name__, client.name).warning(f"Error getting messages batch {temb_ids}: {e2}")
+                msgs = []
+        except Exception as e:
+            client.LOGGER(__name__, client.name).warning(f"Error getting messages batch {temb_ids}: {e}")
+            msgs = []
         total_messages += len(temb_ids)
-        messages.extend(msgs)
+        messages.extend(msgs or [])
     return messages
 
 #===============================================================#
@@ -76,6 +82,7 @@ async def get_message_id(client, message):
             for channel_id_str in db_channels.keys():
                 if f"-100{channel_id}" == channel_id_str:
                     return msg_id, int(channel_id_str)
+            return 0, 0
         else:
             # Check by username for primary DB channel
             if hasattr(client, 'db_channel') and channel_id == client.db_channel.username:
@@ -89,6 +96,7 @@ async def get_message_id(client, message):
                         return msg_id, int(channel_id_str)
                 except:
                     continue
+            return 0, 0
     else:
         return 0, 0
 
@@ -291,11 +299,16 @@ async def check_subscription(client, user_id):
 #===============================================================#
 
 def is_user_subscribed(statuses):
-    """Check if user is subscribed to all channels."""
+    """Check if user is subscribed to all channels. Fail-closed: unknown/bot-error never passes."""
+    if not statuses:
+        return False
+    valid = [s for s in statuses.values() if s is not None]
+    if not valid:
+        return False
     return all(
         status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}
-        for status in statuses.values() if status is not None
-    ) and bool(statuses)
+        for status in valid
+    ) and len(valid) == len(statuses)
 
 #===============================================================#
 
@@ -361,12 +374,17 @@ def force_sub(func):
                     else:
                         button_text = f"{channel_name}"
                 
+                if not channel_link:
+                    client.LOGGER(__name__, client.name).warning(
+                        f"No invite link for force-sub channel {channel_name} ({channel_id}); skipping button."
+                    )
+                    continue
                 buttons.append(InlineKeyboardButton(button_text, url=channel_link))
 
         # Add "Try Again" button if needed
         from_link = message.text.split(" ")
         if len(from_link) > 1:
-            try_again_link = f"https://t.me/{client.username}/?start={from_link[1]}"
+            try_again_link = f"https://t.me/{client.username}?start={from_link[1]}"
             buttons.append(InlineKeyboardButton("🔄 Try Again", url=try_again_link))
 
         # Organize buttons in rows of 1 for better readability

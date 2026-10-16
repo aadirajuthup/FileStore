@@ -32,7 +32,7 @@ def get_short(url, client):
         short_api = getattr(client, 'short_api', SHORT_API)
         
         api_url = f"https://{short_url}/api?api={short_api}&url={url}&alias={alias}"
-        response = requests.get(api_url)
+        response = requests.get(api_url, timeout=10)
         rjson = response.json()
 
         if rjson.get("status") == "success" and response.status_code == 200:

@@ -77,8 +77,27 @@ async def batch(client: Client, message: Message):
             )
         except:
             return
-        s_msg_id, _ = await get_message_id(client, second_message)  # We only need msg_id for second message
+        s_msg_id, second_source = await get_message_id(client, second_message)  # We only need msg_id for second message
         if s_msg_id:
+            if second_source != source_channel_id:
+                await second_message.reply(
+                    "<blockquote>✗ ᴇʀʀᴏʀ</blockquote>\n\nBoth messages must come from the SAME DB channel. "
+                    "Forward first and last from one channel only.",
+                    quote=True,
+                )
+                continue
+            if s_msg_id < f_msg_id:
+                await second_message.reply(
+                    "<blockquote>✗ ᴇʀʀᴏʀ</blockquote>\n\nLast message must not be older than the first. Swap the order.",
+                    quote=True,
+                )
+                continue
+            if (s_msg_id - f_msg_id + 1) > 200:
+                await second_message.reply(
+                    "<blockquote>✗ ᴇʀʀᴏʀ</blockquote>\n\nBatch too large (max 200 files per link). Pick a shorter range.",
+                    quote=True,
+                )
+                continue
             break
         else:
             await second_message.reply("<blockquote>✗ ᴇʀʀᴏʀ</blockquote>\n\nᴛʜɪs ꜰᴏʀᴡᴀʀᴅᴇᴅ ᴘᴏsᴛ ɪs ɴᴏᴛ ꜰʀᴏᴍ ᴍʏ ᴅʙ ᴄʜᴀɴɴᴇʟ ᴏʀ ᴛʜɪs ʟɪɴᴋ ɪs ᴛᴀᴋᴇɴ ꜰʀᴏᴍ ᴅʙ ᴄʜᴀɴɴᴇʟ", quote = True)
@@ -141,6 +160,9 @@ async def nbatch(client: Client, message: Message):
         return
     
     batch_size = int(args[1])
+    if batch_size < 1 or batch_size > 200:
+        await message.reply("<blockquote>✗ ɪɴᴠᴀʟɪᴅ ꜰᴏʀᴍᴀᴛ!</blockquote> ᴜsᴇ: /nbatch {1-200}")
+        return
     
     # Get all database channels with links
     db_channels_info = await get_db_channels_info(client)

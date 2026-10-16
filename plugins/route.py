@@ -6,9 +6,10 @@ routes = web.RouteTableDef()
 
 @routes.get("/", allow_head=True)
 async def root_route_handler(request):
-    readme_path = os.path.join(os.path.dirname(__file__), "README.md")
+    readme_path = os.path.join(os.path.dirname(__file__), "..", "README.md")
+    readme_path = os.path.normpath(readme_path)
     if not os.path.exists(readme_path):
-        return web.Response(text="README.md not found", status=404)
+        return web.Response(text="FileStore bot is running.", status=200)
 
     with open(readme_path, "r", encoding="utf-8") as f:
         md_text = f.read()
@@ -65,6 +66,17 @@ async def root_route_handler(request):
     </html>
     """
     return web.Response(text=html_page, content_type="text/html")
+
+
+@routes.get("/health")
+async def health_route_handler(request):
+    return web.Response(text="OK", status=200)
+
+
+@routes.get("/{tail:.*}")
+async def catch_all_route_handler(request):
+    # Quiet 404 for scanner probes (e.g. /default.asp); keeps logs clean.
+    return web.Response(text="Not found", status=404)
 
 
 app = web.Application()

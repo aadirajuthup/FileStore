@@ -486,7 +486,7 @@ __Enter new integer value of auto delete timer, keep 0 to disable auto delete an
     try:
         res = await client.listen(user_id=query.from_user.id, filters=filters.text, timeout=60)
         timer = res.text.strip()
-        if timer.isdigit() or (timer.startswith('+' or '-') and timer[1:].isdigit()):
+        if timer.isdigit() or (timer[:1] in ('+', '-') and timer[1:].isdigit()):
             timer = int(timer)
             if timer >= 0:
                 client.auto_del = timer
@@ -549,7 +549,7 @@ __Enter new link of start image or send the photo, or wait for 60 second timeout
     await query.message.edit_text(msg)
     try:
         res = await client.listen(user_id=query.from_user.id, filters=(filters.text|filters.photo), timeout=60)
-        if res.text and res.text.startswith('https://' or 'http://'):
+        if res.text and (res.text.startswith('https://') or res.text.startswith('http://')):
             client.messages['START_PHOTO'] = res.text
             return await query.message.edit_text("**This link has been set at the place of start photo!!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('◂ ʙᴀᴄᴋ', 'photos')]]))
         elif res.photo:
@@ -574,7 +574,7 @@ __Enter new link of fsub image or send the photo, or wait for 60 second timeout 
     await query.message.edit_text(msg)
     try:
         res = await client.listen(user_id=query.from_user.id, filters=(filters.text|filters.photo), timeout=60)
-        if res.text and res.text.startswith('https://' or 'http://'):
+        if res.text and (res.text.startswith('https://') or res.text.startswith('http://')):
             client.messages['FSUB_PHOTO'] = res.text
             return await query.message.edit_text("**This link has been set at the place of fsub photo!!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('◂ ʙᴀᴄᴋ', 'photos')]]))
         elif res.photo:

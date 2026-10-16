@@ -31,7 +31,7 @@ class Bot(Client):
         self.fsub = fsub
         self.owner = OWNER_ID
         self.fsub_dict = {}
-        self.admins = admins + [OWNER_ID] if OWNER_ID not in admins else admins
+        self.admins = list(admins) + [OWNER_ID] if OWNER_ID not in admins else list(admins)
         self.messages = messages
         self.auto_del = auto_del
         self.protect = protect
@@ -66,11 +66,15 @@ class Bot(Client):
                         self.fsub_dict[channel[0]] = [name, link, True, 0]
                         self.req_channels.append(channel[0])
                     if channel[2] > 0:
-                        self.fsub_dict[channel[0]] = [name, None, channel[1], channel[2]]
+                        self.fsub_dict[channel[0]] = [name, link, channel[1], channel[2]]
                 except Exception as e:
-                    self.LOGGER(__name__, self.name).warning("Bot can't Export Invite link from Force Sub Channel!")
+                    self.LOGGER(__name__, self.name).warning(f"Bot can't Export Invite link from Force Sub Channel: {e}")
                     self.LOGGER(__name__, self.name).warning("\nBot Stopped.")
-                    sys.exit()
+                    try:
+                        await self.stop()
+                    except Exception:
+                        pass
+                    raise RuntimeError("Bot stopped: cannot export invite link from force-sub channel.")
                     
         # Load dynamically added fsub channels from database
         try:
@@ -125,19 +129,21 @@ class Bot(Client):
             self.LOGGER(__name__, self.name).warning(f"Error loading DB channels: {e}")
         
         # Load shortner settings from database
+        # Shortener is only effective when credentials exist; blank URL/API means disabled.
         try:
             shortner_settings = await self.mongodb.get_shortner_settings()
             self.short_url = shortner_settings.get('short_url', SHORT_URL)
             self.short_api = shortner_settings.get('short_api', SHORT_API)
             self.tutorial_link = shortner_settings.get('tutorial_link', SHORT_TUT)
-            self.shortner_enabled = shortner_settings.get('enabled', True)
+            configured = bool(self.short_url and self.short_api)
+            self.shortner_enabled = bool(shortner_settings.get('enabled', configured)) and configured
         except Exception as e:
             self.LOGGER(__name__, self.name).warning(f"Error loading shortner settings: {e}")
             # Set defaults from config if loading fails
             self.short_url = SHORT_URL
             self.short_api = SHORT_API
             self.tutorial_link = SHORT_TUT
-            self.shortner_enabled = True
+            self.shortner_enabled = bool(SHORT_URL and SHORT_API)
         
         try:
             db_channel = await self.get_chat(self.db)
@@ -152,7 +158,11 @@ class Bot(Client):
             self.LOGGER(__name__, self.name).warning(e)
             self.LOGGER(__name__, self.name).warning(f"Make Sure bot is Admin in DB Channel, and Double check the database channel Value, Current Value {self.db}")
             self.LOGGER(__name__, self.name).info("\nBot Stopped. Join https://t.me/animes_cruise for support")
-            sys.exit()
+            try:
+                await self.stop()
+            except Exception:
+                pass
+            raise RuntimeError(f"Bot stopped: DB channel check failed for {self.db}.")
         self.LOGGER(__name__, self.name).info("Bot Started!!")
         
         # Send restart msge to owner
@@ -172,6 +182,6 @@ class Bot(Client):
 async def web_app():
     app = web.AppRunner(await web_server())
     await app.setup()
-    bind_address = "0.0.0.0"
-    await web.TCPSite(app, bind_address, PORT).start()
+    bind_address = "127.0.0.1"
+    await web.TCPSite(app, bind_address, int(PORT)).start()
     

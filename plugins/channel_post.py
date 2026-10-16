@@ -6,21 +6,22 @@ from helper.helper_func import encode
 
 #===============================================================#
 
-@Client.on_message(filters.private & ~filters.command(['start', 'shortner','users','broadcast','batch','genlink','stats', 'pbroadcast', 'db', 'adddb', 'add_db', 'removedb', 'rm_db',  'ban', 'unban', 'addpremium', 'delpremium', 'premiumusers', 'request', 'profile']))
+@Client.on_message(filters.private & ~filters.command(['start', 'shortner','users','broadcast','batch','nbatch','genlink','stats', 'pbroadcast', 'db', 'adddb', 'add_db', 'removedb', 'rm_db',  'ban', 'unban', 'addpremium', 'delpremium', 'premiumusers', 'request', 'profile']))
 async def channel_post(client: Client, message: Message):
     if message.from_user.id not in client.admins:
         return await message.reply(client.reply_text)
     reply_text = await message.reply_text("Please Wait...!", quote = True)
+    dest = getattr(client, 'primary_db_channel', client.db)
     try:
-        post_message = await message.copy(chat_id = client.db, disable_notification=True)
+        post_message = await message.copy(chat_id = dest, disable_notification=True)
     except FloodWait as e:
         await asyncio.sleep(e.x)
-        post_message = await message.copy(chat_id = client.db, disable_notification=True)
+        post_message = await message.copy(chat_id = dest, disable_notification=True)
     except Exception as e:
         print(e)
         await reply_text.edit_text("Something went Wrong..!")
         return
-    converted_id = post_message.id * abs(client.db)
+    converted_id = post_message.id * abs(dest)
     string = f"get-{converted_id}"
     base64_string = await encode(string)
     link = f"https://t.me/{client.username}?start={base64_string}"

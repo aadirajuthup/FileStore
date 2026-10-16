@@ -109,8 +109,14 @@ class MongoDB:
         await self.user_data.insert_one({'_id': user_id, 'ban': ban})
 
     async def full_userbase(self) -> list[int]:
-        cursor = self.user_data.find()
-        return [doc['_id'] async for doc in cursor]
+        # user_data doubles as config store (_id=1/"fsub_channels"/...); only real user ids count.
+        cursor = self.user_data.find({"_id": {"$ne": 1}})
+        users = []
+        async for doc in cursor:
+            _id = doc.get("_id")
+            if isinstance(_id, int) and not isinstance(_id, bool):
+                users.append(_id)
+        return users
 
     async def del_user(self, user_id: int):
         await self.user_data.delete_one({'_id': user_id})

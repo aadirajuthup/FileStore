@@ -1,11 +1,57 @@
 from helper.helper_func import *
 from pyrogram import Client, filters
+from pyrogram.enums import ParseMode
+from pyrogram.errors import FloodWait
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 import humanize
 from config import MSG_EFFECT, OWNER_ID
 from plugins.shortner import get_short
 from helper.helper_func import get_messages, force_sub, decode, batch_auto_del_notification
 import asyncio
+
+
+def _vault_fallback_name(msg) -> str:
+    for attr in ("document", "video", "audio", "photo", "animation", "voice", "video_note", "sticker"):
+        media = getattr(msg, attr, None)
+        if not media:
+            continue
+        if isinstance(media, (list, tuple)):
+            media = media[-1] if media else None
+        if media is None:
+            continue
+        name = getattr(media, "file_name", None)
+        if name:
+            return name
+    return "file"
+
+
+def get_delivery_caption(client, msg):
+    """Return (caption_text, use_html). Never raises; works for video/photo/doc/audio."""
+    try:
+        original = msg.caption.html if getattr(msg, "caption", None) else ""
+    except Exception:
+        try:
+            original = msg.caption or ""
+        except Exception:
+            original = ""
+        return original, False
+    template = ""
+    try:
+        template = client.messages.get("CAPTION", "") or ""
+    except Exception:
+        template = ""
+    if template:
+        try:
+            previous = original if original else _vault_fallback_name(msg)
+            return template.format(previouscaption=previous), True
+        except Exception as e:
+            try:
+                client.LOGGER(__name__, client.name).warning(f"CAPTION template failed: {e}")
+            except Exception:
+                pass
+            return original, True
+    return original, True if original else False
+
 
 #===============================================================#
 
@@ -44,8 +90,9 @@ async def start_command(client: Client, message: Message):
         # 3. Check premium status
         is_user_pro = await client.mongodb.is_pro(user_id)
         
-        # 4. Check if shortner is enabled
-        shortner_enabled = getattr(client, 'shortner_enabled', True)
+        # 4. Check if shortner is enabled (requires credentials; blank URL/API = disabled)
+        shortner_enabled = bool(getattr(client, 'shortner_enabled', False))
+        shortner_enabled = shortner_enabled and bool(getattr(client, 'short_url', '')) and bool(getattr(client, 'short_api', ''))
 
         # 5. If user is not premium AND shortner is enabled, send short URL and return
         if not is_user_pro and user_id != OWNER_ID and not is_short_link and shortner_enabled:
@@ -56,23 +103,34 @@ async def start_command(client: Client, message: Message):
                 return await message.reply("Couldn't generate short link.")
 
             short_photo = client.messages.get("SHORT_PIC", "")
-            short_caption = client.messages.get("SHORT_MSG", "")
+            short_caption = client.messages.get("SHORT_MSG", "") or "Click Open Link to continue."
             tutorial_link = getattr(client, 'tutorial_link', "https://t.me/How_to_Download_7x/26")
-
-            await client.send_photo(
-                chat_id=message.chat.id,
-                photo=short_photo,
-                caption=short_caption,
-                reply_markup=InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("• ᴏᴘᴇɴ ʟɪɴᴋ", url=short_link),
-                        InlineKeyboardButton("ᴛᴜᴛᴏʀɪᴀʟ •", url=tutorial_link)
-                    ],
-                    [
-                        InlineKeyboardButton(" • ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ •", url="https://t.me/Premium_Fliix/21")
-                    ]
-                ])
-            )
+            short_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("• ᴏᴘᴇɴ ʟɪɴᴋ", url=short_link),
+                    InlineKeyboardButton("ᴛᴜᴛᴏʀɪᴀʟ •", url=tutorial_link)
+                ],
+                [
+                    InlineKeyboardButton(" • ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ •", url="https://t.me/Premium_Fliix/21")
+                ]
+            ])
+            try:
+                if short_photo:
+                    await client.send_photo(
+                        chat_id=message.chat.id,
+                        photo=short_photo,
+                        caption=short_caption,
+                        reply_markup=short_markup
+                    )
+                else:
+                    await message.reply(short_caption, reply_markup=short_markup)
+            except Exception as e:
+                client.LOGGER(__name__, client.name).warning(f"Shortener prompt failed (bad SHORT_PIC?): {e}")
+                try:
+                    await message.reply(short_caption, reply_markup=short_markup)
+                except Exception as e2:
+                    client.LOGGER(__name__, client.name).warning(f"Shortener fallback also failed: {e2}")
+                    return await message.reply("Couldn't generate short link. Please try again.")
             return  # prevent sending actual files
 
         # 6. Decode and prepare file IDs
@@ -89,8 +147,8 @@ async def start_command(client: Client, message: Message):
                 
                 # Try primary channel first
                 primary_multiplier = abs(client.db)
-                start_primary = int(encoded_start / primary_multiplier)
-                end_primary = int(encoded_end / primary_multiplier)
+                start_primary = encoded_start // primary_multiplier
+                end_primary = encoded_end // primary_multiplier
                 
                 # Check if the division results in clean integers (meaning this channel was used for encoding)
                 if encoded_start % primary_multiplier == 0 and encoded_end % primary_multiplier == 0:
@@ -104,8 +162,8 @@ async def start_command(client: Client, message: Message):
                     for channel_id_str in db_channels.keys():
                         channel_id = int(channel_id_str)
                         channel_multiplier = abs(channel_id)
-                        start_test = int(encoded_start / channel_multiplier)
-                        end_test = int(encoded_end / channel_multiplier)
+                        start_test = encoded_start // channel_multiplier
+                        end_test = encoded_end // channel_multiplier
                         
                         if encoded_start % channel_multiplier == 0 and encoded_end % channel_multiplier == 0:
                             source_channel_id = channel_id
@@ -129,7 +187,7 @@ async def start_command(client: Client, message: Message):
                 # Try primary channel first
                 if hasattr(client, 'db_channel') and client.db_channel:
                     primary_multiplier = abs(client.db_channel.id)
-                    msg_id_primary = int(encoded_msg / primary_multiplier)
+                    msg_id_primary = encoded_msg // primary_multiplier
                     
                     if encoded_msg % primary_multiplier == 0:
                         source_channel_id = client.db_channel.id
@@ -140,7 +198,7 @@ async def start_command(client: Client, message: Message):
                         for channel_id_str in db_channels.keys():
                             channel_id = int(channel_id_str)
                             channel_multiplier = abs(channel_id)
-                            msg_id_test = int(encoded_msg / channel_multiplier)
+                            msg_id_test = encoded_msg // channel_multiplier
                             
                             if encoded_msg % channel_multiplier == 0:
                                 source_channel_id = channel_id
@@ -154,7 +212,7 @@ async def start_command(client: Client, message: Message):
                 else:
                     # Fallback for legacy compatibility
                     source_channel_id = client.db
-                    ids = [int(encoded_msg / abs(client.db))]
+                    ids = [encoded_msg // abs(client.db)]
 
         except Exception as e:
             client.LOGGER(__name__, client.name).warning(f"Error decoding base64: {e}")
@@ -205,38 +263,57 @@ async def start_command(client: Client, message: Message):
         await temp_msg.delete()
 
         yugen_msgs = []
+        failed = 0
         for msg in messages:
-            caption = (
-                client.messages.get('CAPTION', '').format(
-                    previouscaption=msg.caption.html if msg.caption else msg.document.file_name
-                ) if bool(client.messages.get('CAPTION', '')) and bool(msg.document)
-                else ("" if not msg.caption else msg.caption.html)
-            )
+            caption, use_html = get_delivery_caption(client, msg)
             reply_markup = msg.reply_markup if not client.disable_btn else None
 
             try:
                 copied_msg = await msg.copy(
                     chat_id=message.from_user.id,
                     caption=caption,
+                    parse_mode=ParseMode.HTML if use_html and caption else None,
                     reply_markup=reply_markup,
                     protect_content=client.protect
                 )
                 yugen_msgs.append(copied_msg)
             except FloodWait as e:
                 await asyncio.sleep(e.x)
-                copied_msg = await msg.copy(
-                    chat_id=message.from_user.id,
-                    caption=caption,
-                    reply_markup=reply_markup,
-                    protect_content=client.protect
-                )
-                yugen_msgs.append(copied_msg)
+                try:
+                    copied_msg = await msg.copy(
+                        chat_id=message.from_user.id,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML if use_html and caption else None,
+                        reply_markup=reply_markup,
+                        protect_content=client.protect
+                    )
+                    yugen_msgs.append(copied_msg)
+                except Exception as e2:
+                    failed += 1
+                    client.LOGGER(__name__, client.name).warning(
+                        f"Failed to send vault msg {getattr(msg, 'id', '?')}: {e2}"
+                    )
             except Exception as e:
-                client.LOGGER(__name__, client.name).warning(f"Failed to send message: {e}")
+                failed += 1
+                client.LOGGER(__name__, client.name).warning(
+                    f"Failed to send vault msg {getattr(msg, 'id', '?')}: {e}"
+                )
+
+        if not yugen_msgs:
+            return await temp_msg.edit(
+                "Couldn't deliver the files (copy from storage failed). "
+                "The link is valid but Telegram refused the copy — check bot.log and try again."
+            )
+        if failed:
+            try:
+                await message.reply(
+                    f"⚠️ {failed} of {len(messages)} file(s) could not be delivered."
+                )
+            except Exception:
                 pass
 
         # 8. Auto delete timer
-        if messages and client.auto_del > 0:
+        if yugen_msgs and client.auto_del > 0:
             # Create transfer link for getting files again (original base64_string)
             transfer_link = original_payload
             
