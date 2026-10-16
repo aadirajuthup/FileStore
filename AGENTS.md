@@ -16,6 +16,25 @@
 > `startswith` tuple fixes (`settings.py`). Template `DB_CHANNEL` now `0` (was empty → SyntaxError).
 > Still open (see §5.2/5.4/5.5): panel persistence for auto_del/protect/texts/admins, atomic DB writes,
 > indexes, broadcast throttle, `.gitignore`/secrets, Dockerfile hardening.
+>
+> RELIABILITY 2026-10-17 (this checkout, one commit per item, pushed as Yato):
+> 1. Stateless fsub gate (`helper_func.py:check_subscription`): live `get_chat_member` per tap,
+>    zero per-tap membership writes (events in `join_request.py` own all rows). Per-channel policy
+>    `entry[4]` (`normalize_fsub_entry`/`fsub_request_enough`, default True=legacy): True = pending
+>    join-request unlocks, False = must already be joined. Toggled in-chat (`toggle_fsub_reqmode`
+>    in `force_sub.py`), shown in both fsub panels. Approved-but-left and no-request both read BANNED,
+>    so join-leave-reopen is blocked again. `is_user_subscribed` stays fail-closed.
+> 2. Explicit batch snapshots: `/batch`+`/nbatch` resolve the range at mint via `_snapshot_range`
+>    (`link_generator.py`), store `{channel_id, msg_ids, missing_ids, created_by}` in new `batches`
+>    collection (`database.py:save_batch/get_batch`), link carries `batch-<id>` (40 chars, fits the
+>    64-char start-param budget). Mint warns about holes; `start.py` decodes `batch-` links, keeps
+>    legacy `get-` range links working, and warns when delivery finds fewer than requested.
+> 3. Structured stdout logs: `new_op`/`op_log` (`helper_func.py`) print one JSON line per event
+>    (`op, module, action, outcome` + fields) and mirror to `LOGGER`. Mint (`channel_post.py`,
+>    `link_generator.py`), gate verdict per channel (`force_sub` wrapper, op shared with handler via
+>    `message.op_id`), open/decode/fetch/per-file delivery + autodel schedule (`start.py`),
+>    autodel fire (`batch_auto_del_notification(op=...)`), broadcast start/progress-every-200/
+>    finish/floodwait (`broadcast.py`). No tokens/keys are ever logged.
 
 ## 1. What this is
 

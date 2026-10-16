@@ -1,7 +1,7 @@
 from pyrogram import Client, filters
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from helper.helper_func import encode, get_message_id
+from helper.helper_func import encode, get_message_id, new_op, op_log
 from config import LOGGER
 import asyncio
 
@@ -69,6 +69,8 @@ async def get_db_channels_info(client):
 async def batch(client: Client, message: Message):
     if message.from_user.id not in client.admins:
         return await message.reply(client.reply_text)
+    op = new_op("mint")
+    op_log(client, op, "link_mint", "start", "ok", admin=message.from_user.id, kind="batch")
     
     # Get all database channels with links
     db_channels_info = await get_db_channels_info(client)
@@ -142,6 +144,8 @@ async def batch(client: Client, message: Message):
         )
     client.LOGGER(__name__, client.name).info(f"Generating batch link with source channel: {source_channel_id}, survivors: {len(survivors)}, missing: {len(missing)}")
     batch_id = await client.mongodb.save_batch(source_channel_id, survivors, message.from_user.id, missing)
+    op_log(client, op, "link_mint", "done", "ok", admin=message.from_user.id,
+           kind="batch", channel=source_channel_id, files=survivors, missing=len(missing))
     string = f"batch-{batch_id}"
     base64_string = await encode(string)
     link = f"https://t.me/{client.username}?start={base64_string}"
@@ -154,6 +158,8 @@ async def batch(client: Client, message: Message):
 async def link_generator(client: Client, message: Message):
     if message.from_user.id not in client.admins:
         return await message.reply(client.reply_text)
+    op = new_op("mint")
+    op_log(client, op, "link_mint", "start", "ok", admin=message.from_user.id, kind="genlink")
     
     # Get all database channels with links
     db_channels_info = await get_db_channels_info(client)
@@ -181,6 +187,8 @@ async def link_generator(client: Client, message: Message):
 
     base64_string = await encode(f"get-{msg_id * abs(source_channel_id)}")
     link = f"https://t.me/{client.username}?start={base64_string}"
+    op_log(client, op, "link_mint", "done", "ok", admin=message.from_user.id,
+           kind="genlink", vault_msg=msg_id, channel=source_channel_id)
     reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔁 sʜᴀʀᴇ ᴜʀʟ", url=f'https://telegram.me/share/url?url={link}')]])
     await channel_message.reply_text(f"<blockquote>✓ ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ</blockquote>\n\n<code>{link}</code>", quote=True, reply_markup=reply_markup)
 
@@ -190,6 +198,8 @@ async def link_generator(client: Client, message: Message):
 async def nbatch(client: Client, message: Message):
     if message.from_user.id not in client.admins:
         return await message.reply(client.reply_text)
+    op = new_op("mint")
+    op_log(client, op, "link_mint", "start", "ok", admin=message.from_user.id, kind="nbatch")
     
     args = message.text.split()
     if len(args) < 2 or not args[1].isdigit():
@@ -233,6 +243,8 @@ async def nbatch(client: Client, message: Message):
         )
 
     batch_id = await client.mongodb.save_batch(source_channel_id, survivors, message.from_user.id, missing)
+    op_log(client, op, "link_mint", "done", "ok", admin=message.from_user.id,
+           kind="nbatch", channel=source_channel_id, files=survivors, missing=len(missing))
     string = f"batch-{batch_id}"
     base64_string = await encode(string)
     link = f"https://t.me/{client.username}?start={base64_string}"

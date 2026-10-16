@@ -6,7 +6,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 import humanize
 from config import MSG_EFFECT, OWNER_ID
 from plugins.shortner import get_short
-from helper.helper_func import get_messages, force_sub, decode, batch_auto_del_notification
+from helper.helper_func import get_messages, force_sub, decode, batch_auto_del_notification, new_op, op_log
 import asyncio
 
 
@@ -59,6 +59,8 @@ def get_delivery_caption(client, msg):
 @force_sub
 async def start_command(client: Client, message: Message):
     user_id = message.from_user.id
+    op = getattr(message, "op_id", None) or new_op("open")
+    message.op_id = op
 
     # 1. Add user if not present
     present = await client.mongodb.present_user(user_id)
@@ -114,6 +116,7 @@ async def start_command(client: Client, message: Message):
                     InlineKeyboardButton(" • ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ •", url="https://t.me/Premium_Fliix/21")
                 ]
             ])
+            op_log(client, op, "link_open", "shortener_gate", "redirect", user=user_id)
             try:
                 if short_photo:
                     await client.send_photo(
@@ -140,6 +143,7 @@ async def start_command(client: Client, message: Message):
             ids = []
             source_channel_id = None
             requested_count = None
+            kind = "unknown"
 
             if len(argument) == 2 and argument[0] == "batch":
                 # Explicit batch snapshot (minted by /batch or /nbatch): survivor list, not a range.
@@ -149,6 +153,7 @@ async def start_command(client: Client, message: Message):
                 source_channel_id = int(batch["channel_id"])
                 ids = [int(m) for m in batch["msg_ids"]]
                 requested_count = len(ids)
+                kind = "batch"
                 client.LOGGER(__name__, client.name).info(f"Decoded batch {argument[1]}: {requested_count} files from {source_channel_id}")
 
             elif len(argument) == 3:
@@ -191,6 +196,7 @@ async def start_command(client: Client, message: Message):
                 
                 ids = range(start, end + 1) if start <= end else list(range(start, end - 1, -1))
                 requested_count = len(ids)
+                kind = "legacy_range"
 
             elif len(argument) == 2:
                 # Single message
@@ -226,10 +232,13 @@ async def start_command(client: Client, message: Message):
                     source_channel_id = client.db
                     ids = [encoded_msg // abs(client.db)]
                 requested_count = len(ids)
+                kind = "single"
 
         except Exception as e:
             client.LOGGER(__name__, client.name).warning(f"Error decoding base64: {e}")
+            op_log(client, op, "link_open", "decode", "fail", user=user_id, error=str(e))
             return await message.reply("⚠️ Invalid or expired link.")
+        op_log(client, op, "link_open", "decode", "ok", user=user_id, kind=kind, requested=requested_count, source=source_channel_id)
 
         # 7. Get messages from the specific source channel first
         temp_msg = await message.reply("Wait A Sec..")
@@ -272,6 +281,7 @@ async def start_command(client: Client, message: Message):
             return
 
         if not messages:
+            op_log(client, op, "link_open", "fetch", "empty", user=user_id, kind=kind, requested=requested_count, found=0)
             if (requested_count or 0) > 1:
                 return await temp_msg.edit(
                     f"Couldn't find the files in the database ({requested_count} expected — "
@@ -279,6 +289,9 @@ async def start_command(client: Client, message: Message):
                 )
             return await temp_msg.edit("Couldn't find the files in the database.")
         await temp_msg.delete()
+        op_log(client, op, "link_open", "fetch", "ok", user=user_id, kind=kind,
+               requested=requested_count, found=len(messages),
+               missing=(requested_count - len(messages)) if requested_count else 0)
 
         yugen_msgs = []
         failed = 0
@@ -295,6 +308,7 @@ async def start_command(client: Client, message: Message):
                     protect_content=client.protect
                 )
                 yugen_msgs.append(copied_msg)
+                op_log(client, op, "delivery", "copy", "ok", user=user_id, vault_msg=getattr(msg, "id", None))
             except FloodWait as e:
                 await asyncio.sleep(e.x)
                 try:
@@ -306,13 +320,16 @@ async def start_command(client: Client, message: Message):
                         protect_content=client.protect
                     )
                     yugen_msgs.append(copied_msg)
+                    op_log(client, op, "delivery", "copy", "ok", user=user_id, vault_msg=getattr(msg, "id", None), retried="floodwait")
                 except Exception as e2:
                     failed += 1
+                    op_log(client, op, "delivery", "copy", "fail", user=user_id, vault_msg=getattr(msg, "id", None), error=str(e2))
                     client.LOGGER(__name__, client.name).warning(
                         f"Failed to send vault msg {getattr(msg, 'id', '?')}: {e2}"
                     )
             except Exception as e:
                 failed += 1
+                op_log(client, op, "delivery", "copy", "fail", user=user_id, vault_msg=getattr(msg, "id", None), error=str(e))
                 client.LOGGER(__name__, client.name).warning(
                     f"Failed to send vault msg {getattr(msg, 'id', '?')}: {e}"
                 )
@@ -351,7 +368,8 @@ async def start_command(client: Client, message: Message):
                 delay_time=client.auto_del,
                 transfer_link=transfer_link,
                 chat_id=message.from_user.id,
-                client=client
+                client=client,
+                op=op
             ))
         return
 

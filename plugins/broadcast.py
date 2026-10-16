@@ -1,6 +1,7 @@
 from pyrogram import Client, filters
 from pyrogram.raw.types import MessageActionPinMessage
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserNotParticipant, Forbidden, PeerIdInvalid, ChatAdminRequired
+from helper.helper_func import new_op, op_log
 import asyncio
 
 #===============================================================#
@@ -28,6 +29,8 @@ async def send_text(client, message):
             blocked = 0
             deleted = 0
             unsuccessful = 0
+            op = new_op("cast")
+            op_log(client, op, "broadcast", "start", "ok", admin=user_id, kind="broadcast", audience=len(query))
             
             pls_wait = await message.reply("<blockquote><i>Broadcasting Message.. This will Take Some Time</i></blockquote>")
             for chat_id in query:
@@ -35,6 +38,7 @@ async def send_text(client, message):
                     await broadcast_msg.copy(chat_id)
                     successful += 1
                 except FloodWait as e:
+                    op_log(client, op, "broadcast", "floodwait", "wait", wait_s=e.x, done=total)
                     await asyncio.sleep(e.x)
                     await broadcast_msg.copy(chat_id)
                     successful += 1
@@ -49,7 +53,11 @@ async def send_text(client, message):
                     unsuccessful += 1
                     pass
                 total += 1
+                if total % 200 == 0:
+                    op_log(client, op, "broadcast", "progress", "running", done=total, successful=successful, unsuccessful=unsuccessful)
             
+            op_log(client, op, "broadcast", "finish", "done", total=total, successful=successful,
+                   blocked=blocked, deleted=deleted, unsuccessful=unsuccessful)
             status = f"""<blockquote><b><u>Broadcast Completed</u></b></blockquote>
     <blockquote expandable><b>Total Users :</b> <code>{total}</code>
     <b>Successful :</b> <code>{successful}</code>
@@ -81,6 +89,8 @@ async def pin_bdcst_text(client, message):
             unsuccessful = 0
     
             pls_wait = await message.reply("<blockquote><i>Broadcasting Message.. This will Take Some Time</i></blockquote>")
+            op = new_op("cast")
+            op_log(client, op, "broadcast", "start", "ok", admin=user_id, kind="pbroadcast", audience=len(query))
             
             for chat_id in query:
                 try:
@@ -91,6 +101,7 @@ async def pin_bdcst_text(client, message):
                     # Pin the sent message immediately after broadcasting
                     await client.pin_chat_message(chat_id=chat_id, message_id=sent_msg.id, both_sides=True)
                 except FloodWait as e:
+                    op_log(client, op, "broadcast", "floodwait", "wait", wait_s=e.x, done=total)
                     await asyncio.sleep(e.x)
                     # Retry sending and pinning after flood wait
                     sent_msg = await broadcast_msg.copy(chat_id)
@@ -106,7 +117,11 @@ async def pin_bdcst_text(client, message):
                     print(f"Failed to send message to {chat_id}: {e}")
                     unsuccessful += 1
                 total += 1
+                if total % 200 == 0:
+                    op_log(client, op, "broadcast", "progress", "running", done=total, successful=successful, unsuccessful=unsuccessful)
     
+            op_log(client, op, "broadcast", "finish", "done", total=total, successful=successful,
+                   blocked=blocked, deleted=deleted, unsuccessful=unsuccessful)
             status = f"""<blockquote><b><u>Broadcast Completed</u></b></blockquote>
     <b>Total Users :</b> <code>{total}</code>
     <b>Successful :</b> <code>{successful}</code>

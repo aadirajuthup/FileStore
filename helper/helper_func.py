@@ -1,12 +1,40 @@
 import base64
 import re
 import asyncio
+import json
+import uuid
 from pyrogram import filters, Client
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.errors import UserNotParticipant, Forbidden, PeerIdInvalid, ChatAdminRequired, FloodWait
 from datetime import datetime, timedelta
 from pyrogram import errors
+
+#===============================================================#
+
+def new_op(prefix="op"):
+    """Short unique operation id; one per user-visible action, threaded through every log line."""
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def op_log(client, op, module, action, outcome, **fields):
+    """One structured JSON-ish line to stdout (process runner collects it) + mirrored to bot.log.
+
+    Never raises; never logs secrets (callers must not pass tokens/keys).
+    """
+    record = {"op": op, "module": module, "action": action, "outcome": outcome}
+    record.update(fields)
+    try:
+        print(json.dumps(record, default=str), flush=True)
+    except Exception:
+        try:
+            print(f"op={op} module={module} action={action} outcome={outcome}", flush=True)
+        except Exception:
+            pass
+    try:
+        client.LOGGER(module, getattr(client, "name", "bot")).info(f"[{op}] {action} -> {outcome}")
+    except Exception:
+        pass
 
 #===============================================================#
 
@@ -310,7 +338,10 @@ def is_user_subscribed(statuses):
 def force_sub(func):
     """Decorator to enforce force subscription before executing a command."""
     async def wrapper(client: Client, message: Message):
+        op = getattr(message, "op_id", None) or new_op("open")
+        message.op_id = op
         if not client.fsub_dict:
+            op_log(client, op, "force_sub", "gate_check", "pass", user=getattr(message.from_user, "id", None), reason="no_fsub_configured")
             return await func(client, message)
         photo = client.messages.get('FSUB_PHOTO', '')
         if photo:
@@ -324,10 +355,13 @@ def force_sub(func):
             )
         user_id = message.from_user.id
         statuses = await check_subscription(client, user_id)
+        verdicts = {str(cid): (st.name if st is not None else "unknown") for cid, st in statuses.items()}
 
         if is_user_subscribed(statuses):
+            op_log(client, op, "force_sub", "gate_check", "pass", user=user_id, channels=verdicts)
             await msg.delete()
             return await func(client, message)
+        op_log(client, op, "force_sub", "gate_check", "block", user=user_id, channels=verdicts)
 
         # User is not subscribed to all channels
         buttons = []
@@ -472,11 +506,13 @@ async def delete_message(msg, delay_time):
 #===============================================================#
 
 #Function for batch auto delete - sends one notification for all files
-async def batch_auto_del_notification(bot_username, messages, delay_time, transfer_link, chat_id, client):
+async def batch_auto_del_notification(bot_username, messages, delay_time, transfer_link, chat_id, client, op=None):
     """Send one notification for batch of files and delete all after timer"""
+    op = op or new_op("autodel")
     if not messages:
         return
         
+    op_log(client, op, "auto_del", "schedule", "scheduled", chat_id=chat_id, files=len(messages), delay_s=delay_time)
     # Send single countdown notification
     notification_msg = await client.send_message(
         chat_id=chat_id,
@@ -487,11 +523,14 @@ async def batch_auto_del_notification(bot_username, messages, delay_time, transf
     await asyncio.sleep(delay_time)
     
     # Delete all file messages
+    deleted = 0
     for msg in messages:
         try:
             await msg.delete()
+            deleted += 1
         except Exception as e:
             print(f"Error deleting message {getattr(msg, 'id', 'Unknown')}: {e}")
+    op_log(client, op, "auto_del", "fire", "done", chat_id=chat_id, deleted=deleted, total=len(messages))
     
     # Update notification with get files button
     try:
