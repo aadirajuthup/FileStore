@@ -139,8 +139,19 @@ async def start_command(client: Client, message: Message):
             argument = string.split("-")
             ids = []
             source_channel_id = None
+            requested_count = None
 
-            if len(argument) == 3:
+            if len(argument) == 2 and argument[0] == "batch":
+                # Explicit batch snapshot (minted by /batch or /nbatch): survivor list, not a range.
+                batch = await client.mongodb.get_batch(argument[1])
+                if not batch or not batch.get("msg_ids"):
+                    return await message.reply("⚠️ Invalid or expired link.")
+                source_channel_id = int(batch["channel_id"])
+                ids = [int(m) for m in batch["msg_ids"]]
+                requested_count = len(ids)
+                client.LOGGER(__name__, client.name).info(f"Decoded batch {argument[1]}: {requested_count} files from {source_channel_id}")
+
+            elif len(argument) == 3:
                 # Try to determine source channel from encoded multiplier
                 encoded_start = int(argument[1])
                 encoded_end = int(argument[2])
@@ -179,6 +190,7 @@ async def start_command(client: Client, message: Message):
                         end = end_primary
                 
                 ids = range(start, end + 1) if start <= end else list(range(start, end - 1, -1))
+                requested_count = len(ids)
 
             elif len(argument) == 2:
                 # Single message
@@ -213,6 +225,7 @@ async def start_command(client: Client, message: Message):
                     # Fallback for legacy compatibility
                     source_channel_id = client.db
                     ids = [encoded_msg // abs(client.db)]
+                requested_count = len(ids)
 
         except Exception as e:
             client.LOGGER(__name__, client.name).warning(f"Error decoding base64: {e}")
@@ -259,6 +272,11 @@ async def start_command(client: Client, message: Message):
             return
 
         if not messages:
+            if (requested_count or 0) > 1:
+                return await temp_msg.edit(
+                    f"Couldn't find the files in the database ({requested_count} expected — "
+                    "they were probably removed from storage)."
+                )
             return await temp_msg.edit("Couldn't find the files in the database.")
         await temp_msg.delete()
 
@@ -308,6 +326,15 @@ async def start_command(client: Client, message: Message):
             try:
                 await message.reply(
                     f"⚠️ {failed} of {len(messages)} file(s) could not be delivered."
+                )
+            except Exception:
+                pass
+        gone = (requested_count or len(messages)) - len(messages)
+        if gone > 0:
+            try:
+                await message.reply(
+                    f"⚠️ {gone} of {requested_count} file(s) in this batch were already gone "
+                    "from storage. Survivors delivered above."
                 )
             except Exception:
                 pass

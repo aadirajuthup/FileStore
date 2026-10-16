@@ -1,5 +1,6 @@
 import motor.motor_asyncio
 from datetime import datetime, timedelta
+from bson import ObjectId
 
 class MongoDB:
     _instances = {}
@@ -14,6 +15,7 @@ class MongoDB:
             instance.premium_users = instance.db['pros']
             instance.fsub_status = instance.db['fsub_status']  # New collection for fsub status tracking
             instance.request_sub = instance.db['request_sub']  # New collection for join request tracking
+            instance.batches = instance.db['batches']  # Explicit batch snapshots (item-2): {channel_id, msg_ids, missing_ids, created_by, created_at}
             cls._instances[(uri, db_name)] = instance
         return cls._instances[(uri, db_name)]
 
@@ -626,6 +628,28 @@ class MongoDB:
             await self.set_db_channels(db_channels)
             return not current_status
         return None
+
+    # ✅ BATCH SNAPSHOT FUNCTIONS (item-2: explicit survivor lists, not blind ranges)
+
+    async def save_batch(self, channel_id: int, msg_ids: list, created_by: int, missing_ids: list = None) -> str:
+        """Snapshot a resolved batch: explicit survivor msg_ids + holes seen at mint. Returns batch id."""
+        doc = {
+            "channel_id": int(channel_id),
+            "msg_ids": [int(m) for m in msg_ids],
+            "missing_ids": [int(m) for m in (missing_ids or [])],
+            "created_by": int(created_by),
+            "created_at": datetime.now(),
+        }
+        res = await self.batches.insert_one(doc)
+        return str(res.inserted_id)
+
+    async def get_batch(self, batch_id: str):
+        """Fetch a batch snapshot by id. Returns None for malformed/unknown ids."""
+        try:
+            oid = ObjectId(str(batch_id))
+        except Exception:
+            return None
+        return await self.batches.find_one({"_id": oid})
 
     # ✅ BOT SETTINGS FUNCTIONS
 
