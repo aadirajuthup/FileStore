@@ -213,80 +213,53 @@ async def is_bot_admin(client, channel_id):
 
 #===============================================================#
 
+# fsub entry layout: [name, invite_link, request_enabled, timer_min, request_enough?]
+# 5th element is the per-channel gate policy (item-1 configurable):
+#   True  = pending join-request alone unlocks delivery (legacy behavior)
+#   False = user must already be a joined member.
+# Entries stored before this change have 4 elements and read as True.
+def normalize_fsub_entry(entry):
+    entry = list(entry) if entry else []
+    while len(entry) < 5:
+        entry.append(True)
+    return entry[:5]
+
+
+def fsub_request_enough(entry) -> bool:
+    try:
+        if entry is not None and len(entry) > 4:
+            return bool(entry[4])
+    except Exception:
+        pass
+    return True
+
+#===============================================================#
+
 async def check_subscription(client, user_id):
-    """Enhanced subscription check with better request channel handling."""
+    """Stateless gate read: live get_chat_member per channel, zero per-tap writes.
+
+    Membership rows are owned by event handlers (plugins/join_request.py).
+    This function only READS join-request state for request-mode channels.
+    Policy per channel (entry[4]): pending request unlocks delivery iff True;
+    otherwise the user must already be a joined member.
+    """
     statuses = {}
+    member_states = {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}
 
-    # Ensure user exists in database
-    if not await client.mongodb.present_user(user_id):
-        await client.mongodb.add_user(user_id)
+    for channel_id, raw_entry in client.fsub_dict.items():
+        entry = normalize_fsub_entry(raw_entry)
+        channel_name = entry[0]
+        request = bool(entry[2])
 
-    for channel_id, (channel_name, channel_link, request, timer) in client.fsub_dict.items():
         try:
-            # Get actual membership status first
             user = await client.get_chat_member(channel_id, user_id)
-            actual_status = user.status
-            
-            # If user is already a member, admin, or owner
-            if actual_status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER}:
-                await client.mongodb.update_fsub_status(user_id, channel_id, "joined")
-                await client.mongodb.add_channel_user(channel_id, user_id)
-                
-                # If there was a pending join request, mark it as approved
-                if request and await client.mongodb.has_submitted_join_request(user_id, channel_id):
-                    await client.mongodb.update_join_request_status(user_id, channel_id, "approved")
-                
-                statuses[channel_id] = actual_status
+            if user.status in member_states:
+                statuses[channel_id] = user.status
                 continue
-            
-            # User is not a member - check if they left after being approved  
-            if request:
-                # For request channels, check if user has submitted a request
-                has_request = await client.mongodb.has_submitted_join_request(user_id, channel_id)
-                if has_request:
-                    # User has submitted request but not yet a member
-                    request_status = await client.mongodb.get_join_request_status(user_id, channel_id)
-                    
-                    if request_status == "approved":
-                        # Request was approved but user still not in channel
-                        # This means user might have left after approval - force them to rejoin
-                        await client.mongodb.update_fsub_status(user_id, channel_id, "left")
-                        await client.mongodb.remove_join_request(user_id, channel_id)
-                        statuses[channel_id] = ChatMemberStatus.BANNED
-                    else:
-                        # Request is still pending, allow user to proceed
-                        await client.mongodb.update_fsub_status(user_id, channel_id, "request_submitted")
-                        statuses[channel_id] = ChatMemberStatus.MEMBER  # Treat as subscribed for request channels
-                else:
-                    # No request submitted yet for request channel
-                    await client.mongodb.update_fsub_status(user_id, channel_id, "not_requested")
-                    statuses[channel_id] = ChatMemberStatus.BANNED
-            else:
-                # Regular channel (not request), user must be a member
-                await client.mongodb.update_fsub_status(user_id, channel_id, "left")
-                await client.mongodb.remove_channel_user(channel_id, user_id)
-                statuses[channel_id] = ChatMemberStatus.BANNED
-                
+            # Known non-member status (left/kicked/restricted): request state decides.
+            statuses[channel_id] = await _request_channel_verdict(client, user_id, channel_id, request, entry)
         except UserNotParticipant:
-            # User is not in the channel
-            await client.mongodb.update_fsub_status(user_id, channel_id, "left")
-            await client.mongodb.remove_channel_user(channel_id, user_id)
-            
-            if request:
-                # For request channels, check if user has submitted a request
-                has_request = await client.mongodb.has_submitted_join_request(user_id, channel_id)
-                if has_request:
-                    # User has submitted request but not in channel - still allow access for request channels
-                    await client.mongodb.update_fsub_status(user_id, channel_id, "request_submitted")
-                    statuses[channel_id] = ChatMemberStatus.MEMBER  # Treat as subscribed for request channels
-                else:
-                    # No request submitted yet
-                    await client.mongodb.update_fsub_status(user_id, channel_id, "not_requested")
-                    statuses[channel_id] = ChatMemberStatus.BANNED
-            else:
-                # Regular channel, user must join
-                statuses[channel_id] = ChatMemberStatus.BANNED
-                
+            statuses[channel_id] = await _request_channel_verdict(client, user_id, channel_id, request, entry)
         except Forbidden:
             client.LOGGER(__name__, client.name).warning(f"Bot lacks permission for {channel_name}.")
             statuses[channel_id] = None
@@ -295,6 +268,28 @@ async def check_subscription(client, user_id):
             statuses[channel_id] = None
 
     return statuses
+
+
+async def _request_channel_verdict(client, user_id, channel_id, request, entry):
+    """Read-only verdict for a user who is not currently a member."""
+    if not request:
+        return ChatMemberStatus.BANNED
+    try:
+        has_request = await client.mongodb.has_submitted_join_request(user_id, channel_id)
+    except Exception as e:
+        client.LOGGER(__name__, client.name).warning(f"Join-request read failed for {user_id} in {channel_id}: {e}")
+        return None
+    if not has_request:
+        return ChatMemberStatus.BANNED
+    try:
+        req_status = await client.mongodb.get_join_request_status(user_id, channel_id)
+    except Exception as e:
+        client.LOGGER(__name__, client.name).warning(f"Join-request read failed for {user_id} in {channel_id}: {e}")
+        return None
+    # "approved" but not a member = left after approval -> must rejoin/re-request.
+    if req_status == "pending" and fsub_request_enough(entry):
+        return ChatMemberStatus.MEMBER
+    return ChatMemberStatus.BANNED
 
 #===============================================================#
 
@@ -338,7 +333,9 @@ def force_sub(func):
         buttons = []
         channels_message = f"{client.messages.get('FSUB', '')}\n\n"
 
-        for channel_id, (channel_name, channel_link, request, timer) in client.fsub_dict.items():
+        for channel_id, raw_entry in client.fsub_dict.items():
+            entry = normalize_fsub_entry(raw_entry)
+            channel_name, channel_link, request, timer = entry[0], entry[1], bool(entry[2]), entry[3]
             status = statuses.get(channel_id, None)
 
             # Generate invite link if needed

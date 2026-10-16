@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from config import LOGGER, PORT, OWNER_ID, SHORT_URL, SHORT_API, SHORT_TUT
 from helper import MongoDB
+from helper.helper_func import normalize_fsub_entry
 
 version = "v1.0.0"
 
@@ -61,12 +62,12 @@ class Bot(Client):
                         chat_link = await self.create_chat_invite_link(channel[0], creates_join_request=channel[1])
                         link = chat_link.invite_link
                     if not channel[1]:
-                        self.fsub_dict[channel[0]] = [name, link, False, 0]
+                        self.fsub_dict[channel[0]] = normalize_fsub_entry([name, link, False, 0])
                     if channel[1]:
-                        self.fsub_dict[channel[0]] = [name, link, True, 0]
+                        self.fsub_dict[channel[0]] = normalize_fsub_entry([name, link, True, 0])
                         self.req_channels.append(channel[0])
                     if channel[2] > 0:
-                        self.fsub_dict[channel[0]] = [name, link, channel[1], channel[2]]
+                        self.fsub_dict[channel[0]] = normalize_fsub_entry([name, link, channel[1], channel[2]])
                 except Exception as e:
                     self.LOGGER(__name__, self.name).warning(f"Bot can't Export Invite link from Force Sub Channel: {e}")
                     self.LOGGER(__name__, self.name).warning("\nBot Stopped.")
@@ -87,8 +88,9 @@ class Bot(Client):
                 try:
                     chat = await self.get_chat(channel_id)
                     name = chat.title
-                    # Update name in case it changed
+                    # Update name in case it changed; normalize legacy 4-element entries.
                     channel_data[0] = name
+                    channel_data = normalize_fsub_entry(channel_data)
                     self.fsub_dict[channel_id] = channel_data
                     if channel_data[2]:  # if request is True
                         self.req_channels.append(channel_id)

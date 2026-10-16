@@ -10,9 +10,10 @@ async def fsub(client, query):
         channel_list = []
         for channel_id, channel_data in client.fsub_dict.items():
             channel_name = channel_data[0] if channel_data and len(channel_data) > 0 else "Unknown"
-            request_status = "Request: ✅" if channel_data[2] else "Request: ❌"
-            timer_status = f"Timer: {channel_data[3]}m" if channel_data[3] > 0 else "Timer: ∞"
-            channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}")
+            request_status = "Request: ✅" if len(channel_data) > 2 and channel_data[2] else "Request: ❌"
+            timer_status = f"Timer: {channel_data[3]}m" if len(channel_data) > 3 and channel_data[3] > 0 else "Timer: ∞"
+            gate_status = "Gate: request-ok" if (len(channel_data) <= 4 or channel_data[4]) else "Gate: member-only"
+            channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}, {gate_status}")
         
         channels_display = "\n".join(channel_list)
     else:
@@ -26,6 +27,7 @@ __Use the appropriate button below to add or remove a force subscription channel
 """
     reply_markup = InlineKeyboardMarkup([
         [InlineKeyboardButton('ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ', 'add_fsub'), InlineKeyboardButton('ʀᴇᴍᴏᴠᴇ ᴄʜᴀɴɴᴇʟ', 'rm_fsub')],
+        [InlineKeyboardButton('ᴛᴏɢɢʟᴇ ɢᴀᴛᴇ ᴍᴏᴅᴇ', 'toggle_fsub_reqmode')],
         [InlineKeyboardButton('◂ ʙᴀᴄᴋ', 'settings')]]
     )
     await query.message.edit_text(msg, reply_markup=reply_markup)
@@ -59,11 +61,11 @@ async def add_fsub(client: Client, query: CallbackQuery):
         chat = await client.get_chat(channel_id)
         name = chat.title
         if timer > 0:
-            client.fsub_dict[channel_id] = [name, None, request, timer]
+            client.fsub_dict[channel_id] = [name, None, request, timer, True]
         else:
             chat_link = await client.create_chat_invite_link(channel_id, creates_join_request=request)
             link = chat_link.invite_link
-            client.fsub_dict[channel_id] = [name, link, request, timer]
+            client.fsub_dict[channel_id] = [name, link, request, timer, True]
         
         # Update req_channels list if request is enabled
         if request and channel_id not in client.req_channels:
@@ -101,5 +103,29 @@ async def rm_fsub(client: Client, query: CallbackQuery):
         
         await fsub(client, query)
         return await ask_channel_info.reply(f"__Channel with id: `{channel_id}` has been removed as a force sub channel!!__")
+    except Exception as e:
+        return await ask_channel_info.reply(f"**Error:** `{e}`")
+
+#===============================================================#
+
+@Client.on_callback_query(filters.regex('^toggle_fsub_reqmode$'))
+async def toggle_fsub_reqmode(client: Client, query: CallbackQuery):
+    """Flip a request-mode channel between 'join-request is enough' and 'must be a member'."""
+    from helper.helper_func import normalize_fsub_entry
+    await query.answer()
+    ask_channel_info = await client.ask(query.from_user.id, "Send the force-sub channel id (negative integer) whose gate mode you want to flip in the next 60 seconds!\n<blockquote>`request-ok` = a pending join-request unlocks files. `member-only` = user must already be joined.</blockquote>", filters=filters.text, timeout=60)
+    try:
+        channel_id = int(ask_channel_info.text.strip())
+        if channel_id not in client.fsub_dict.keys():
+            return await ask_channel_info.reply("**This channel id is not in force sub list!**")
+        entry = normalize_fsub_entry(client.fsub_dict[channel_id])
+        if not entry[2]:
+            return await ask_channel_info.reply("**Gate mode only applies to request-mode channels.** Add the channel with `yes` request first.")
+        entry[4] = not entry[4]
+        client.fsub_dict[channel_id] = entry
+        await client.mongodb.add_fsub_channel(channel_id, entry)
+        mode = "request-ok (join-request is enough)" if entry[4] else "member-only (must be joined)"
+        await fsub(client, query)
+        return await ask_channel_info.reply(f"__Gate mode for `{channel_id}` is now: **{mode}**__")
     except Exception as e:
         return await ask_channel_info.reply(f"**Error:** `{e}`")

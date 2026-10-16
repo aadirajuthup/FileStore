@@ -97,9 +97,10 @@ async def fsub(client, query):
         channel_list = []
         for channel_id, channel_data in client.fsub_dict.items():
             channel_name = channel_data[0] if channel_data and len(channel_data) > 0 else "Unknown"
-            request_status = "✓ ʀᴇѦᴜᴇsᴛ" if channel_data[2] else "✗ ʀᴇѦᴜᴇsᴛ"
-            timer_status = f"ᴛɪᴍᴇʀ: {channel_data[3]}ᴍ" if channel_data[3] > 0 else "ᴛɪᴍᴇʀ: ∞"
-            channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}")
+            request_status = "✓ ʀᴇѦᴜᴇsᴛ" if len(channel_data) > 2 and channel_data[2] else "✗ ʀᴇѦᴜᴇsᴛ"
+            timer_status = f"ᴛɪᴍᴇʀ: {channel_data[3]}ᴍ" if len(channel_data) > 3 and channel_data[3] > 0 else "ᴛɪᴍᴇʀ: ∞"
+            gate_status = "ɢᴀᴛᴇ: ʀᴇǫᴜᴇsᴛ-ᴏᴋ" if (len(channel_data) <= 4 or channel_data[4]) else "ɢᴀᴛᴇ: ᴍᴇᴍʙᴇʀ-ᴏɴʟʏ"
+            channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}, {gate_status}")
         
         channels_display = "\n".join(channel_list)
     else:
