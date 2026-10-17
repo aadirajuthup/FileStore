@@ -1,6 +1,6 @@
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
-from helper.helper_func import is_bot_admin
+from helper.helper_func import is_bot_admin, normalize_fsub_entry
 
 #===============================================================#
 
@@ -9,10 +9,11 @@ async def fsub(client, query):
     if client.fsub_dict:
         channel_list = []
         for channel_id, channel_data in client.fsub_dict.items():
-            channel_name = channel_data[0] if channel_data and len(channel_data) > 0 else "Unknown"
-            request_status = "Request: ✅" if len(channel_data) > 2 and channel_data[2] else "Request: ❌"
-            timer_status = f"Timer: {channel_data[3]}m" if len(channel_data) > 3 and channel_data[3] > 0 else "Timer: ∞"
-            gate_status = "Gate: request-ok" if (len(channel_data) <= 4 or channel_data[4]) else "Gate: member-only"
+            data = normalize_fsub_entry(channel_data)
+            channel_name = data[0] if data and data[0] else "Unknown"
+            request_status = "Request: ✅" if data[2] else "Request: ❌"
+            timer_status = f"Timer: {data[3]}m" if data[3] > 0 else "Timer: ∞"
+            gate_status = "Gate: request-ok" if data[4] else "Gate: member-only"
             channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}, {gate_status}")
         
         channels_display = "\n".join(channel_list)
@@ -111,7 +112,6 @@ async def rm_fsub(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex('^toggle_fsub_reqmode$'))
 async def toggle_fsub_reqmode(client: Client, query: CallbackQuery):
     """Flip a request-mode channel between 'join-request is enough' and 'must be a member'."""
-    from helper.helper_func import normalize_fsub_entry
     await query.answer()
     ask_channel_info = await client.ask(query.from_user.id, "Send the force-sub channel id (negative integer) whose gate mode you want to flip in the next 60 seconds!\n<blockquote>`request-ok` = a pending join-request unlocks files. `member-only` = user must already be joined.</blockquote>", filters=filters.text, timeout=60)
     try:

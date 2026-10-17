@@ -2,6 +2,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors.pyromod import ListenerTimeout
 from config import OWNER_ID
+from helper.helper_func import normalize_fsub_entry
 import humanize
 
 #===============================================================#
@@ -10,8 +11,9 @@ import humanize
 async def settings(client, query):
     # Count active force subscription channels by type
     total_fsub = len(client.fsub_dict)
-    request_enabled = sum(1 for data in client.fsub_dict.values() if data[2])
-    timer_enabled = sum(1 for data in client.fsub_dict.values() if data[3] > 0)
+    _entries = [normalize_fsub_entry(d) for d in client.fsub_dict.values()]
+    request_enabled = sum(1 for data in _entries if data[2])
+    timer_enabled = sum(1 for data in _entries if data[3] > 0)
     
     # Count DB channels
     total_db_channels = len(getattr(client, 'db_channels', {}))
@@ -52,8 +54,9 @@ async def settings(client, query):
 async def settings_page_2(client, query):
     # Count active force subscription channels by type
     total_fsub = len(client.fsub_dict)
-    request_enabled = sum(1 for data in client.fsub_dict.values() if data[2])
-    timer_enabled = sum(1 for data in client.fsub_dict.values() if data[3] > 0)
+    _entries = [normalize_fsub_entry(d) for d in client.fsub_dict.values()]
+    request_enabled = sum(1 for data in _entries if data[2])
+    timer_enabled = sum(1 for data in _entries if data[3] > 0)
     
     # Count DB channels
     total_db_channels = len(getattr(client, 'db_channels', {}))
@@ -96,10 +99,11 @@ async def fsub(client, query):
     if client.fsub_dict:
         channel_list = []
         for channel_id, channel_data in client.fsub_dict.items():
-            channel_name = channel_data[0] if channel_data and len(channel_data) > 0 else "Unknown"
-            request_status = "✓ ʀᴇѦᴜᴇsᴛ" if len(channel_data) > 2 and channel_data[2] else "✗ ʀᴇѦᴜᴇsᴛ"
-            timer_status = f"ᴛɪᴍᴇʀ: {channel_data[3]}ᴍ" if len(channel_data) > 3 and channel_data[3] > 0 else "ᴛɪᴍᴇʀ: ∞"
-            gate_status = "ɢᴀᴛᴇ: ʀᴇǫᴜᴇsᴛ-ᴏᴋ" if (len(channel_data) <= 4 or channel_data[4]) else "ɢᴀᴛᴇ: ᴍᴇᴍʙᴇʀ-ᴏɴʟʏ"
+            data = normalize_fsub_entry(channel_data)
+            channel_name = data[0] if data and data[0] else "Unknown"
+            request_status = "✓ ʀᴇѦᴜᴇsᴛ" if data[2] else "✗ ʀᴇѦᴜᴇsᴛ"
+            timer_status = f"ᴛɪᴍᴇʀ: {data[3]}ᴍ" if data[3] > 0 else "ᴛɪᴍᴇʀ: ∞"
+            gate_status = "ɢᴀᴛᴇ: ʀᴇǫᴜᴇsᴛ-ᴏᴋ" if data[4] else "ɢᴀᴛᴇ: ᴍᴇᴍʙᴇʀ-ᴏɴʟʏ"
             channel_list.append(f"• `{channel_name}` (`{channel_id}`) - {request_status}, {timer_status}, {gate_status}")
         
         channels_display = "\n".join(channel_list)
